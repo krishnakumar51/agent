@@ -285,18 +285,47 @@ def execute_action_node(state: AgentState) -> AgentState:
                 if container_selector and field_xpaths:
                     product_containers = driver.find_elements(By.XPATH, container_selector)
                     for container in product_containers:
+                        # Helper function to check for sponsored content
+                        def is_sponsored(element):
+                            # Check text content, including children, for ad-related keywords
+                            text_content = element.text.lower()
+                            ad_keywords = ['sponsored', 'ad', 'advertisement', 'promoted']
+                            if any(keyword in text_content for keyword in ad_keywords):
+                                return True
+                            # Check for specific aria-labels or attributes commonly used for ads
+                            aria_label = element.get_attribute('aria-label') or ''
+                            if any(keyword in aria_label.lower() for keyword in ad_keywords):
+                                return True
+                            return False
+
+                        if is_sponsored(container):
+                            push_status(job_id, "skipped_sponsored_item")
+                            continue
+
                         item_data = {}
                         for field, xpath in field_xpaths.items():
                             try:
                                 element = container.find_element(By.XPATH, f".{xpath}")
                                 item_data[field] = element.text.strip() or element.get_attribute("content") or ""
-                            except NoSuchElementException: item_data[field] = None
-                        if item_data.get("product_title"): new_items.append(item_data)
-                current_titles = {item.get('product_title') for item in state['results']}
-                unique_new_items = [item for item in new_items if item.get('product_title') and item.get('product_title') not in current_titles]
+                            except NoSuchElementException:
+                                item_data[field] = None
+                        if item_data.get("product_title"):
+                            new_items.append(item_data)
+
+                # De-duplicate based on a composite key of title and price
+                existing_items = {f"{item.get('product_title')}_{item.get('price')}" for item in state['results']}
+                unique_new_items = []
+                for item in new_items:
+                    composite_key = f"{item.get('product_title')}_{item.get('price')}"
+                    if item.get('product_title') and composite_key not in existing_items:
+                        unique_new_items.append(item)
+                        existing_items.add(composite_key)
+
                 state['results'].extend(unique_new_items)
-                if len(unique_new_items) > 0: state['stagnation_count'] = 0
-                else: state['stagnation_count'] += 1
+                if len(unique_new_items) > 0:
+                    state['stagnation_count'] = 0
+                else:
+                    state['stagnation_count'] += 1
                 push_status(job_id, "partial_result", {"new_items_found": len(unique_new_items)})
                 action_succeeded = True
             
